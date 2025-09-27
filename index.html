@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Memory Game</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css?family=Anton" rel="stylesheet">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
+    <script src="https://unpkg.com/@farcaster/auth-kit@0.2.3/dist/auth-kit.min.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div class="wrap">
+        <!-- Start Screen -->
+        <div class="start-screen">
+            <div class="start-content">
+                <h1 class="game-title">Crypto Memory Game</h1>
+                <p class="game-subtitle">Test your memory with crypto tokens and coins!</p>
+                <div class="menu-buttons">
+                    <button class="menu-btn start-game-btn">
+                        <span class="fa fa-play"></span>
+                        Select Level
+                    </button>
+                    <button class="menu-btn history-btn">
+                        <span class="fa fa-history"></span>
+                        My History
+                    </button>
+                    <button class="menu-btn leaderboard-btn">
+                        <span class="fa fa-trophy"></span>
+                        Leaderboard
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level Selection Screen -->
+        <div class="level-screen" style="display: none;">
+            <div class="level-content">
+                <h2 class="level-title">🎯 Choose Your Level</h2>
+                <button class="back-btn level-back">
+                    <span class="fa fa-arrow-left"></span>
+                    Back to Menu
+                </button>
+                <div class="level-grid">
+                    <div class="level-card" data-level="1">
+                        <div class="level-number">1</div>
+                        <div class="level-name">Beginner</div>
+                        <div class="level-grid-size">2×2</div>
+                        <div class="level-description">4 cards • 2 pairs</div>
+                    </div>
+                    <div class="level-card locked" data-level="2">
+                        <span class="fa fa-lock lock-icon"></span>
+                        <div class="level-number">2</div>
+                        <div class="level-name">Easy</div>
+                        <div class="level-grid-size">3×3</div>
+                        <div class="level-description">8 cards • 4 pairs</div>
+                    </div>
+                    <div class="level-card locked" data-level="3">
+                        <span class="fa fa-lock lock-icon"></span>
+                        <div class="level-number">3</div>
+                        <div class="level-name">Medium</div>
+                        <div class="level-grid-size">4×4</div>
+                        <div class="level-description">16 cards • 8 pairs</div>
+                    </div>
+                    <div class="level-card locked" data-level="4">
+                        <span class="fa fa-lock lock-icon"></span>
+                        <div class="level-number">4</div>
+                        <div class="level-name">Hard</div>
+                        <div class="level-grid-size">4×5</div>
+                        <div class="level-description">20 cards • 10 pairs</div>
+                    </div>
+                    <div class="level-card locked" data-level="5">
+                        <span class="fa fa-lock lock-icon"></span>
+                        <div class="level-number">5</div>
+                        <div class="level-name">Expert</div>
+                        <div class="level-grid-size">6×4</div>
+                        <div class="level-description">24 cards • 12 pairs</div>
+                    </div>
+                    <div class="level-card locked" data-level="6">
+                        <span class="fa fa-lock lock-icon"></span>
+                        <div class="level-number">6</div>
+                        <div class="level-name">Master</div>
+                        <div class="level-grid-size">6×5</div>
+                        <div class="level-description">30 cards • 15 pairs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Area -->
+        <div class="game-container" style="display: none;">
+            <div class="game-header">
+                <button class="back-btn">
+                    <span class="fa fa-arrow-left"></span>
+                    Back to Menu
+                </button>
+                <div class="game-stats">
+                    <span class="moves">Moves: <span class="move-count">0</span></span>
+                    <span class="timer">Time: <span class="time-count">00:00</span></span>
+                    <span class="daily-games">Games Left: <span class="games-remaining">6</span>/6</span>
+                    <span class="break-timer" style="display: none;">Break: <span class="break-time">00:00</span></span>
+                </div>
+            </div>
+            <div class="game"></div>
+            <div class="preview-message" style="display: none;">
+                <div class="preview-text">Memorize the cards!</div>
+                <div class="preview-countdown">3</div>
+            </div>
+        </div>
+
+        <!-- History Screen -->
+        <div class="history-screen" style="display: none;">
+            <div class="history-content">
+                <h2 class="history-title">My Game History</h2>
+                <button class="back-btn history-back">
+                    <span class="fa fa-arrow-left"></span>
+                    Back to Menu
+                </button>
+                <div class="history-list">
+                    <p class="no-history">No games played yet. Start playing to see your history!</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboard Screen -->
+        <div class="leaderboard-screen" style="display: none;">
+            <div class="leaderboard-content">
+                <h2 class="leaderboard-title">🏆 Leaderboard</h2>
+                <button class="back-btn leaderboard-back">
+                    <span class="fa fa-arrow-left"></span>
+                    Back to Menu
+                </button>
+                <div class="player-name-section">
+                    <div class="farcaster-section" id="farcaster-section">
+                        <div class="farcaster-status">
+                            <span class="fa fa-user"></span>
+                            <span id="farcaster-status-text">Connect with Farcaster for automatic username</span>
+                        </div>
+                        <button id="connect-farcaster-btn" class="farcaster-btn">
+                            <span class="fa fa-link"></span>
+                            Connect Farcaster
+                        </button>
+                        <button id="disconnect-farcaster-btn" class="farcaster-btn disconnect" style="display: none;">
+                            <span class="fa fa-unlink"></span>
+                            Disconnect
+                        </button>
+                    </div>
+                    <div class="manual-name-section">
+                        <label for="player-name">Or enter name manually:</label>
+                        <input type="text" id="player-name" placeholder="Enter your name" maxlength="20">
+                        <button id="save-name-btn">Save</button>
+                    </div>
+                </div>
+                <div class="leaderboard-filters">
+                    <button class="filter-btn active" data-filter="all">All Time</button>
+                    <button class="filter-btn" data-filter="today">Today</button>
+                    <button class="filter-btn" data-filter="week">This Week</button>
+                </div>
+                <div class="leaderboard-list">
+                    <p class="no-scores">No scores yet. Be the first to play!</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Win Modal -->
+        <div class="modal-overlay">
+            <div class="modal">
+                <h2 class="winner">You Rock!</h2>
+                <div class="game-results">
+                    <p class="result-moves">Moves: <span class="final-moves">0</span></p>
+                    <p class="result-time">Time: <span class="final-time">00:00</span></p>
+                    <p class="result-score">Score: <span class="final-score">0</span></p>
+                    <div class="rank-display" style="display: none;">
+                        <p class="new-rank">🎉 New Personal Best! Rank #<span class="rank-number">1</span></p>
+                    </div>
+                </div>
+                <button class="restart">Play Again?</button>
+                <button class="next-level" style="display: none;">Next Level</button>
+                <button class="back-to-menu">Back to Menu</button>
+                <p class="message">Developed on <a href="https://codepen.io">CodePen</a> by <a href="https://codepen.io/natewiley">Nate Wiley</a></p>
+                <p class="share-text">Share it?</p>
+                <ul class="social">
+                    <li><a target="_blank" class="twitter" href="https://twitter.com/share?url=https://codepen.io/natewiley/pen/HBrbL"><span class="fa fa-twitter"></span></a></li>
+                    <li><a target="_blank" class="facebook" href="https://www.facebook.com/sharer.php?u=https://codepen.io/natewiley/pen/HBrbL"><span class="fa fa-facebook"></span></a></li>
+                    <li><a target="_blank" class="google" href="https://plus.google.com/share?url=https://codepen.io/natewiley/pen/HBrbL"><span class="fa fa-google"></span></a></li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Game Over Modal -->
+        <div class="gameover-modal-overlay" style="display: none;">
+            <div class="gameover-modal">
+                <h2 class="gameover-title">⏰ Time's Up!</h2>
+                <div class="gameover-message">
+                    <p>You ran out of time!</p>
+                    <p>Better luck next time! 💪</p>
+                </div>
+                <div class="gameover-stats">
+                    <p>Level: <span class="gameover-level">1</span></p>
+                    <p>Moves Made: <span class="gameover-moves">0</span></p>
+                    <p>Cards Matched: <span class="gameover-matched">0</span></p>
+                </div>
+                <div class="gameover-buttons">
+                    <button class="retry-level">🔄 Retry Level</button>
+                    <button class="back-to-levels">📋 Level Select</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- First Time Player Modal -->
+        <div class="first-time-modal-overlay" style="display: none;">
+            <div class="first-time-modal">
+                <h2 class="welcome-title">🪙 Welcome to Crypto Memory Game!</h2>
+                <p class="welcome-message">Test your crypto knowledge! Connect your Farcaster account to compete on the global leaderboard!</p>
+                <div class="welcome-buttons">
+                    <button id="welcome-connect-farcaster" class="welcome-btn primary">
+                        <span class="fa fa-link"></span>
+                        Connect with Farcaster
+                    </button>
+                    <button id="welcome-play-anonymous" class="welcome-btn secondary">
+                        <span class="fa fa-user-secret"></span>
+                        Play as Guest
+                    </button>
+                </div>
+                <p class="welcome-note">You can always connect Farcaster later from the leaderboard screen.</p>
+            </div>
+        </div>
+        
+        <footer>
+            <p class="disclaimer">All logos are property of their respective owners, No Copyright infringement intended.</p>
+        </footer>
+    </div><!-- End Wrap -->
+    
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
