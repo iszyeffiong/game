@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="styles.css">
     <link href="https://fonts.googleapis.com/css?family=Anton" rel="stylesheet">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
-    <script src="https://unpkg.com/@farcaster/auth-kit@0.2.3/dist/auth-kit.min.js"></script>
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body>
@@ -132,24 +131,14 @@
                     Back to Menu
                 </button>
                 <div class="player-name-section">
-                    <div class="farcaster-section" id="farcaster-section">
-                        <div class="farcaster-status">
-                            <span class="fa fa-user"></span>
-                            <span id="farcaster-status-text">Connect with Farcaster for automatic username</span>
-                        </div>
-                        <button id="connect-farcaster-btn" class="farcaster-btn">
-                            <span class="fa fa-link"></span>
-                            Connect Farcaster
-                        </button>
-                        <button id="disconnect-farcaster-btn" class="farcaster-btn disconnect" style="display: none;">
-                            <span class="fa fa-unlink"></span>
-                            Disconnect
-                        </button>
-                    </div>
                     <div class="manual-name-section">
-                        <label for="player-name">Or enter name manually:</label>
-                        <input type="text" id="player-name" placeholder="Enter your name" maxlength="20">
+                        <label for="player-name">Enter your Farcaster username:</label>
+                        <input type="text" id="player-name" placeholder="e.g. cryptomaster" maxlength="20">
                         <button id="save-name-btn">Save</button>
+                        <small class="username-hint">Will be formatted as lowercase without spaces</small>
+                        <div id="username-warning" class="username-warning" style="display: none;">
+                            <small style="color: #ff6b6b;">⚠️ Set a username to save your scores to the leaderboard!</small>
+                        </div>
                     </div>
                 </div>
                 <div class="leaderboard-filters">
@@ -212,23 +201,22 @@
         <div class="first-time-modal-overlay" style="display: none;">
             <div class="first-time-modal">
                 <h2 class="welcome-title">🪙 Welcome to Crypto Memory Game!</h2>
-                <p class="welcome-message">Test your crypto knowledge! Connect your Farcaster account to compete on the global leaderboard!</p>
+                <p class="welcome-message">Test your crypto knowledge and memory skills with popular tokens and coins!</p>
+                <div class="welcome-form">
+                    <label for="welcome-username">Enter your Farcaster username (optional):</label>
+                    <input type="text" id="welcome-username" placeholder="e.g. cryptomaster" maxlength="20">
+                    <p class="welcome-note">Username will be cleaned (lowercase, no spaces). You can skip this and add it later.</p>
+                </div>
                 <div class="welcome-buttons">
-                    <button id="welcome-connect-farcaster" class="welcome-btn primary">
-                        <span class="fa fa-link"></span>
-                        Connect with Farcaster
-                    </button>
-                    <button id="welcome-play-anonymous" class="welcome-btn secondary">
-                        <span class="fa fa-user-secret"></span>
-                        Play as Guest
+                    <button id="welcome-start-playing" class="welcome-btn primary">
+                        <span class="fa fa-play"></span>
+                        Start Playing
                     </button>
                 </div>
-                <p class="welcome-note">You can always connect Farcaster later from the leaderboard screen.</p>
             </div>
         </div>
         
         <footer>
-            <p class="disclaimer">All logos are property of their respective owners, No Copyright infringement intended.</p>
         </footer>
     </div><!-- End Wrap -->
     

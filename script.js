@@ -51,9 +51,9 @@
 			return now.toISOString().split('T')[0];
 		},
 		
-		// Check global break status (3 games per 15min across all levels)
+		// Check global break status (3 consecutive failures trigger 15min break)
 		checkGlobalBreakStatus: async function(userId) {
-			if (!supabase) return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: 0 };
+			if (!supabase) return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 			
 			try {
 				const gameDay = this.getGameDay();
@@ -61,18 +61,18 @@
 				
 				const { data, error } = await supabase
 					.from('user_break_status')
-					.select('games_in_session, session_start, break_until')
+					.select('consecutive_failures, last_game_result, session_start, break_until')
 					.eq('user_id', userId)
 					.eq('date', gameDay)
 					.single();
 				
 				if (error && error.code !== 'PGRST116') {
 					// No record found, user can play
-					return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: 0 };
+					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 				}
 				
 				if (!data) {
-					return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: 0 };
+					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 				}
 				
 				const sessionStart = new Date(data.session_start);
@@ -81,44 +81,29 @@
 				// Check if user is currently on break
 				if (breakUntil && now < breakUntil) {
 					const breakTimeLeft = Math.ceil((breakUntil - now) / 1000);
-					return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, gamesInSession: data.games_in_session };
+					return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, consecutiveFailures: data.consecutive_failures };
 				}
 				
-				// Check if 15 minutes have passed since session start (reset session)
-				const sessionDurationMs = now - sessionStart;
-				const fifteenMinutesMs = 15 * 60 * 1000;
-				if (sessionDurationMs >= fifteenMinutesMs) {
-					// Reset session
+				// Check if break period has expired and reset consecutive failures
+				if (breakUntil && now >= breakUntil) {
 					await supabase
 						.from('user_break_status')
-						.upsert({
-							user_id: userId,
-							date: gameDay,
-							games_in_session: 0,
+						.update({
+							consecutive_failures: 0,
+							break_until: null,
 							session_start: now.toISOString(),
-							break_until: null
-						});
-					return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: 0 };
-				}
-				
-				// Check if user has played 3 games in current session
-				if (data.games_in_session >= 3) {
-					// Set break until 15 minutes from session start
-					const breakUntilTime = new Date(sessionStart.getTime() + 15 * 60 * 1000);
-					await supabase
-						.from('user_break_status')
-						.update({ break_until: breakUntilTime.toISOString() })
+							updated_at: now.toISOString()
+						})
 						.eq('user_id', userId)
 						.eq('date', gameDay);
 					
-					const breakTimeLeft = Math.ceil((breakUntilTime - now) / 1000);
-					return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, gamesInSession: data.games_in_session };
+					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 				}
 				
-				return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: data.games_in_session };
+				return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: data.consecutive_failures || 0 };
 			} catch (error) {
 				console.error('Error checking global break status:', error);
-				return { canPlay: true, onBreak: false, breakTimeLeft: 0, gamesInSession: 0 };
+				return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 			}
 		},
 
@@ -192,8 +177,8 @@
 			}
 		},
 
-		// Update global break status (3 games per 15min)
-		updateGlobalBreakStatus: async function(userId) {
+		// Record game outcome and update break status (3 consecutive failures trigger 15min break)
+		recordGameOutcome: async function(userId, gameResult) {
 			if (!supabase) return;
 			
 			try {
@@ -203,32 +188,34 @@
 				// Get current break status
 				const { data: currentData } = await supabase
 					.from('user_break_status')
-					.select('games_in_session, session_start')
+					.select('consecutive_failures, last_game_result, session_start')
 					.eq('user_id', userId)
 					.eq('date', gameDay)
 					.single();
 				
-				let gamesInSession = 0;
+				let consecutiveFailures = 0;
 				let sessionStart = now;
 				
 				if (currentData) {
-					const existingSessionStart = new Date(currentData.session_start);
-					const sessionDuration = (now - existingSessionStart) / (1000 * 60); // minutes
+					sessionStart = new Date(currentData.session_start);
 					
-					if (sessionDuration < 15) {
-						// Continue current session
-						gamesInSession = currentData.games_in_session;
-						sessionStart = existingSessionStart;
+					if (gameResult === 'fail') {
+						// Increment consecutive failures
+						consecutiveFailures = (currentData.consecutive_failures || 0) + 1;
+					} else if (gameResult === 'win') {
+						// Reset consecutive failures on win
+						consecutiveFailures = 0;
 					}
-					// If >= 15 minutes, start new session (gamesInSession stays 0)
+				} else {
+					// First game for this user/day
+					consecutiveFailures = gameResult === 'fail' ? 1 : 0;
 				}
 				
-				const newGamesInSession = gamesInSession + 1;
 				let breakUntil = null;
 				
-				// If this is the 3rd game in session, set break time
-				if (newGamesInSession >= 3) {
-					breakUntil = new Date(sessionStart.getTime() + 15 * 60 * 1000); // 15 min from session start
+				// If user has 3 consecutive failures, set break time
+				if (consecutiveFailures >= 3) {
+					breakUntil = new Date(now.getTime() + 15 * 60 * 1000); // 15 min from now
 				}
 				
 				await supabase
@@ -236,20 +223,22 @@
 					.upsert({
 						user_id: userId,
 						date: gameDay,
-						games_in_session: newGamesInSession,
+						consecutive_failures: consecutiveFailures,
+						last_game_result: gameResult,
 						session_start: sessionStart.toISOString(),
-						break_until: breakUntil ? breakUntil.toISOString() : null
+						break_until: breakUntil ? breakUntil.toISOString() : null,
+						updated_at: now.toISOString()
 					}, {
 						onConflict: 'user_id,date'
 					});
 				
 				return {
-					gamesInSession: newGamesInSession,
+					consecutiveFailures: consecutiveFailures,
 					onBreak: breakUntil !== null,
 					breakUntil: breakUntil
 				};
 			} catch (error) {
-				console.error('Error updating global break status:', error);
+				console.error('Error recording game outcome:', error);
 				return null;
 			}
 		},
@@ -345,31 +334,110 @@
 				console.error('Error fetching user total:', error);
 				return 0;
 			}
+		},
+
+		// Create or update user profile
+		createOrUpdateUserProfile: async function(userId, username) {
+			if (!supabase || !username || username === 'Anonymous') return;
+			
+			try {
+				// Check if profile exists
+				const { data: existingProfile, error: fetchError } = await supabase
+					.from('user_profiles')
+					.select('id, username')
+					.eq('user_id', userId)
+					.single();
+				
+				if (fetchError && fetchError.code !== 'PGRST116') {
+					console.error('Error checking user profile:', fetchError);
+					return;
+				}
+				
+				if (existingProfile) {
+					// Update existing profile if username changed
+					if (existingProfile.username !== username) {
+						const { error: updateError } = await supabase
+							.from('user_profiles')
+							.update({ 
+								username: username,
+								updated_at: new Date().toISOString()
+							})
+							.eq('user_id', userId);
+						
+						if (updateError) {
+							console.error('Error updating user profile:', updateError);
+						}
+					}
+				} else {
+					// Create new profile
+					const { error: insertError } = await supabase
+						.from('user_profiles')
+						.insert([{
+							user_id: userId,
+							username: username,
+							created_at: new Date().toISOString(),
+							updated_at: new Date().toISOString()
+						}]);
+					
+					if (insertError) {
+						console.error('Error creating user profile:', insertError);
+					}
+				}
+			} catch (error) {
+				console.error('Error managing user profile:', error);
+			}
 		}
 	};
 	
 	var GameManager = {
 		currentUserId: null,
 		
-		init: function() {
+		init: async function() {
 			initSupabase();
 			this.generateUserId();
+			await this.loadUsernameFromDatabase();
 			this.bindMenuEvents();
 			this.loadHistory();
 			this.loadLeaderboard();
-			this.initFarcaster();
 			this.loadLevelProgress();
 			this.checkFirstTimeUser();
 		},
 		
 		generateUserId: function() {
-			// Generate or get user ID - can be enhanced with Farcaster ID later
+			// Generate or get user ID for local storage
 			let userId = localStorage.getItem('crypto_memory_user_id');
 			if (!userId) {
 				userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 				localStorage.setItem('crypto_memory_user_id', userId);
 			}
 			this.currentUserId = userId;
+		},
+
+		loadUsernameFromDatabase: async function() {
+			if (!supabase || !this.currentUserId) return;
+			
+			try {
+				const { data, error } = await supabase
+					.from('user_profiles')
+					.select('username')
+					.eq('user_id', this.currentUserId)
+					.single();
+				
+				if (error && error.code !== 'PGRST116') {
+					console.error('Error loading username:', error);
+					return;
+				}
+				
+				if (data && data.username) {
+					// Only update localStorage if we don't have a local username or if database username is different
+					const localUsername = localStorage.getItem('memoryGamePlayerName');
+					if (!localUsername || localUsername === 'Anonymous') {
+						localStorage.setItem('memoryGamePlayerName', data.username);
+					}
+				}
+			} catch (error) {
+				console.error('Error syncing username:', error);
+			}
 		},
 
 		bindMenuEvents: function() {
@@ -386,6 +454,33 @@
 			});
 
 			$('.back-btn, .history-back, .leaderboard-back, .level-back').on('click', function() {
+				// If we're on the game screen and a game is active, show confirmation
+				if ($('.game-container').is(':visible') && typeof Memory !== 'undefined' && Memory.timer) {
+					const confirmQuit = confirm('Are you sure you want to quit this game? This will count as a loss.\n\nClick OK to quit (loss) or Cancel to continue playing.');
+					if (confirmQuit) {
+						// Player chose to quit - record as loss and clean up
+						Memory.stopTimer();
+						Memory.paused = true;
+
+						// Record the game as a loss
+						DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail').then(async (globalResult) => {
+							// Update daily game count for this level
+							await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, Memory.currentLevel);
+
+							// Show break notification if needed
+							if (globalResult && globalResult.onBreak) {
+								setTimeout(() => {
+									const failures = globalResult.consecutiveFailures;
+									alert(`You've failed ${failures} games in a row. Take a 15-minute break before playing again!`);
+								}, 500);
+							}
+						});
+
+						GameManager.showStartScreen();
+					}
+					// If they cancel, do nothing - stay in the game
+					return;
+				}
 				GameManager.showStartScreen();
 			});
 
@@ -418,8 +513,8 @@
 				}
 			});
 
-			$('#save-name-btn').on('click', function() {
-				GameManager.savePlayerName();
+			$('#save-name-btn').on('click', async function() {
+				await GameManager.savePlayerName();
 			});
 
 			$('.filter-btn').on('click', function() {
@@ -441,21 +536,8 @@
 				GameManager.showLevelScreen();
 			});
 
-			$('#connect-farcaster-btn').on('click', function() {
-				GameManager.connectFarcaster();
-			});
-
-			$('#disconnect-farcaster-btn').on('click', function() {
-				GameManager.disconnectFarcaster();
-			});
-
-			$('#welcome-connect-farcaster').on('click', function() {
-				GameManager.connectFarcaster();
-				GameManager.hideFirstTimeModal();
-			});
-
-			$('#welcome-play-anonymous').on('click', function() {
-				GameManager.hideFirstTimeModal();
+			$('#welcome-start-playing').on('click', async function() {
+				await GameManager.handleWelcomeStart();
 			});
 		},
 
@@ -540,7 +622,7 @@
 			}, 1000);
 		},
 
-		showBreakTimer: function(minutes, seconds, gamesPlayed) {
+		showBreakTimer: function(minutes, seconds, consecutiveFailures) {
 			// Create break timer modal if it doesn't exist
 			if (!$('.break-timer-modal').length) {
 				const breakModal = `
@@ -548,7 +630,7 @@
 						<div class="break-timer-content">
 							<div class="break-timer-icon">⏰</div>
 							<h2>15-Minute Break Time!</h2>
-							<p>You've played <strong>${gamesPlayed}</strong> games this session.</p>
+							<p>You've failed <strong>${consecutiveFailures}</strong> games in a row.</p>
 							<div class="break-countdown">
 								<div class="countdown-display">
 									<span class="countdown-minutes">00</span>:<span class="countdown-seconds">00</span>
@@ -610,7 +692,7 @@
 			if (globalBreakCheck.onBreak) {
 				const minutes = Math.floor(globalBreakCheck.breakTimeLeft / 60);
 				const seconds = globalBreakCheck.breakTimeLeft % 60;
-				this.showBreakTimer(minutes, seconds, globalBreakCheck.gamesInSession);
+				this.showBreakTimer(minutes, seconds, globalBreakCheck.consecutiveFailures);
 				return;
 			}
 			
@@ -631,6 +713,7 @@
 			$('.leaderboard-screen').hide();
 			$('.modal-overlay').hide();
 			$('.game-container').show();
+			$('.game-header').show();
 			$('.game').show();
 			Memory.init(level || 1);
 		},
@@ -648,6 +731,15 @@
 			$('.game-container').hide();
 			$('.history-screen').hide();
 			$('.leaderboard-screen').show();
+
+			// Show username warning if no username is set
+			var currentUsername = this.getPlayerName();
+			if (currentUsername === 'Anonymous') {
+				$('#username-warning').show();
+			} else {
+				$('#username-warning').hide();
+			}
+
 			this.displayLeaderboard('all');
 		},
 
@@ -756,14 +848,52 @@
 			$('#player-name').val(playerName !== 'Anonymous' ? playerName : '');
 		},
 
-		savePlayerName: function() {
+		savePlayerName: async function() {
 			var name = $('#player-name').val().trim();
 			if (name && name.length > 0) {
-				localStorage.setItem('memoryGamePlayerName', name);
-				alert('Name saved! Your future games will be recorded under "' + name + '"');
+				// Clean username for Farcaster-style format
+				var cleanName = this.cleanUsername(name);
+				localStorage.setItem('memoryGamePlayerName', cleanName);
+				
+				// Also save to database
+				await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, cleanName);
+				
+				alert('Name saved! Your future games will be recorded under "' + cleanName + '"');
+				$('#player-name').val(cleanName); // Update the input to show cleaned version
+				$('#username-warning').hide(); // Hide the warning since username is now set
 			} else {
-				alert('Please enter a valid name');
+				alert('Please enter a valid username');
 			}
+		},
+
+		handleWelcomeStart: async function() {
+			// Get username from welcome form
+			var username = $('#welcome-username').val().trim();
+			if (username && username.length > 0) {
+				// Clean and save the username
+				var cleanUsername = this.cleanUsername(username);
+				localStorage.setItem('memoryGamePlayerName', cleanUsername);
+
+				// Also save to database immediately
+				try {
+					await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, cleanUsername);
+					console.log('✅ Welcome username saved to database:', cleanUsername);
+				} catch (error) {
+					console.error('❌ Failed to save welcome username to database:', error);
+					// Continue anyway - localStorage will preserve it
+				}
+			} else {
+				console.log('ℹ️ No username entered in welcome modal');
+			}
+			this.hideFirstTimeModal();
+		},
+
+		cleanUsername: function(username) {
+			// Remove spaces, convert to lowercase, remove special chars except underscore
+			return username
+				.toLowerCase()
+				.replace(/[^a-z0-9_]/g, '')
+				.substring(0, 15); // Limit length
 		},
 
 		// Leaderboard Management
@@ -964,99 +1094,7 @@
 			this.loadPlayerName();
 		},
 
-		// Farcaster Integration
-		initFarcaster: function() {
-			try {
-				// Initialize Farcaster Auth Kit
-				if (typeof window.farcasterAuthKit !== 'undefined') {
-					this.farcasterAuth = window.farcasterAuthKit.createAuth({
-						domain: window.location.hostname,
-						siweUri: window.location.origin,
-						rpcUrl: 'https://mainnet.optimism.io',
-					});
-				}
-				this.updateFarcasterStatus();
-			} catch (error) {
-				console.log('Farcaster not available, using fallback');
-				this.farcasterAuth = null;
-			}
-		},
 
-		connectFarcaster: function() {
-			if (!this.farcasterAuth) {
-				// Fallback: simulate Farcaster connection for demo purposes
-				this.simulateFarcasterConnection();
-				return;
-			}
-
-			try {
-				this.farcasterAuth.authenticate()
-					.then((result) => {
-						if (result.success) {
-							var username = result.profile.username || result.profile.displayName || 'FCUser';
-							localStorage.setItem('memoryGameFarcasterUser', JSON.stringify({
-								username: username,
-								fid: result.profile.fid,
-								connected: true,
-								connectedAt: Date.now()
-							}));
-							localStorage.setItem('memoryGamePlayerName', username);
-							this.updateFarcasterStatus();
-							alert('Connected successfully! Username set to: ' + username);
-						}
-					})
-					.catch((error) => {
-						console.error('Farcaster authentication failed:', error);
-						alert('Failed to connect to Farcaster. Please try again.');
-					});
-			} catch (error) {
-				console.error('Farcaster connection error:', error);
-				this.simulateFarcasterConnection();
-			}
-		},
-
-		simulateFarcasterConnection: function() {
-			// Demo mode: Allow user to enter a simulated Farcaster username
-			var username = prompt('Demo Mode: Enter your Farcaster username:');
-			if (username && username.trim()) {
-				username = username.trim();
-				localStorage.setItem('memoryGameFarcasterUser', JSON.stringify({
-					username: username,
-					fid: 'demo_' + Date.now(),
-					connected: true,
-					connectedAt: Date.now(),
-					demo: true
-				}));
-				localStorage.setItem('memoryGamePlayerName', username);
-				this.updateFarcasterStatus();
-				alert('Demo connection successful! Username set to: ' + username);
-			}
-		},
-
-		disconnectFarcaster: function() {
-			localStorage.removeItem('memoryGameFarcasterUser');
-			localStorage.removeItem('memoryGamePlayerName');
-			this.updateFarcasterStatus();
-			alert('Disconnected from Farcaster');
-		},
-
-		updateFarcasterStatus: function() {
-			var farcasterUser = JSON.parse(localStorage.getItem('memoryGameFarcasterUser') || 'null');
-			var statusText = $('#farcaster-status-text');
-			var connectBtn = $('#connect-farcaster-btn');
-			var disconnectBtn = $('#disconnect-farcaster-btn');
-
-			if (farcasterUser && farcasterUser.connected) {
-				var demoText = farcasterUser.demo ? ' (Demo Mode)' : '';
-				statusText.html('<span class="fa fa-check-circle" style="color: #28a745;"></span> Connected as: <strong>' + farcasterUser.username + '</strong>' + demoText);
-				connectBtn.hide();
-				disconnectBtn.show();
-			} else {
-				statusText.html('<span class="fa fa-user"></span> Connect with Farcaster for automatic username');
-				connectBtn.show();
-				disconnectBtn.hide();
-			}
-		},
 
 		// Level Progress Management
 		loadLevelProgress: function() {
@@ -1135,9 +1173,16 @@
 		},
 
 		markLevelCompleted: function(level) {
+			// Mark level as completed in both storage systems for consistency
 			var levelData = JSON.parse(localStorage.getItem('memoryGameLevelCompletions') || '{}');
 			levelData[level] = true;
 			localStorage.setItem('memoryGameLevelCompletions', JSON.stringify(levelData));
+
+			// Also update completedLevels array to ensure unlocking works
+			if (this.completedLevels.indexOf(level) === -1) {
+				this.completedLevels.push(level);
+				this.saveLevelProgress();
+			}
 		}
 	};
 
@@ -1199,15 +1244,16 @@
 			// Update daily game count for this level (even for losses)
 			await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, this.currentLevel);
 			
-			// Update global break status (3 games per 15min across all levels)
-			const globalResult = await DatabaseManager.updateGlobalBreakStatus(GameManager.currentUserId);
+			// Record game failure and update break status
+			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail');
 			
 			this.showGameOverModal();
 			
 			// Show break notification if needed
 			if (globalResult && globalResult.onBreak) {
 				setTimeout(() => {
-					alert('You\'ve played 3 games in 15 minutes. Take a break before playing any level again!');
+					const failures = globalResult.consecutiveFailures;
+					alert(`You've failed ${failures} games in a row. Take a 15-minute break before playing again!`);
 				}, 2000);
 			}
 		},
@@ -1222,11 +1268,12 @@
 			$('.gameover-moves').text(this.moves);
 			$('.gameover-matched').text(matchedCards + ' / ' + totalCards);
 			
+			// Hide game header and grid
+			$('.game-header').hide();
+			this.$game.hide();
+			
 			// Show modal
 			$('.gameover-modal-overlay').show();
-			
-			// Hide the game
-			this.$game.fadeOut();
 		},
 
 		hideGameOverModal: function() {
@@ -1345,20 +1392,29 @@
 			// Update daily game count for this level
 			await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, this.currentLevel);
 			
-			// Update global break status (3 games per 15min across all levels)
-			const globalResult = await DatabaseManager.updateGlobalBreakStatus(GameManager.currentUserId);
+			// Record game win and update break status (resets consecutive failures)
+			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'win');
 			
-			// Show break notification if needed
+			// Show break notification if needed (though this shouldn't happen on wins)
 			if (globalResult && globalResult.onBreak) {
 				setTimeout(() => {
-					alert('You\'ve played 3 games in 15 minutes. Take a break before playing any level again!');
+					alert('You\'ve failed 3 games in a row. Take a 15-minute break before playing again!');
 				}, 2000);
 			}
 			
 			// Handle level completion and unlocking
 			GameManager.markLevelCompleted(this.currentLevel);
 			var newLevelUnlocked = GameManager.unlockNextLevel(this.currentLevel);
-			
+
+			// Check if this is the user's first game completion and they don't have a username set
+			var currentUsername = GameManager.getPlayerName();
+			if (currentUsername === 'Anonymous' && !localStorage.getItem('firstGameCompleted')) {
+				localStorage.setItem('firstGameCompleted', 'true');
+				setTimeout(() => {
+					alert('🎉 Great job on your first game! To save your scores to the leaderboard, please set a username in the Leaderboard section.');
+				}, 2000);
+			}
+
 			// Save to local history for backward compatibility
 			var personalBest = GameManager.saveGameResult(finalMoves, finalTime, timeUsed);
 			
@@ -1399,6 +1455,7 @@
 			
 			setTimeout(function(){
 				Memory.showModal();
+				$('.game-header').hide();
 				Memory.$game.fadeOut();
 			}, 1000);
 		},
@@ -1419,6 +1476,7 @@
 			this.shuffleCards(this.cardsArray);
 			this.setup();
 			this.initGameTracking();
+			$('.game-header').show();
 			this.$game.show("slow");
 		},
 
@@ -1551,8 +1609,8 @@
 	];
     
 	// Initialize the game manager when the page loads
-	$(document).ready(function() {
-		GameManager.init();
+	$(document).ready(async function() {
+		await GameManager.init();
 	});
 
 })();

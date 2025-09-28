@@ -14,12 +14,13 @@ CREATE TABLE daily_games (
     UNIQUE(user_id, level, date)
 );
 
--- Table for tracking global break system (3 games per 15min across all levels)
+-- Table for tracking global break system (3 consecutive failures trigger 15min break)
 CREATE TABLE user_break_status (
     id SERIAL PRIMARY KEY,
     user_id VARCHAR(255) NOT NULL,
     date DATE NOT NULL,
-    games_in_session INTEGER DEFAULT 0, -- Games played in current 15min session
+    consecutive_failures INTEGER DEFAULT 0, -- Consecutive game failures
+    last_game_result VARCHAR(10), -- 'win' or 'fail' - tracks the last game outcome
     session_start TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     break_until TIMESTAMP WITH TIME ZONE, -- When current break period ends
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
