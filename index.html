@@ -11,32 +11,27 @@
 </head>
 <body>
     <div class="wrap">
-        <div class="phone-container">
-            <div class="phone-notch"></div>
-            <div class="phone-screen">
-                <!-- Start Screen -->
-                <div class="start-screen">
-                    <div class="start-content">
-                        <h1 class="game-title">Crypto Memory Game</h1>
-                        <p class="game-subtitle">Test your memory with crypto tokens and coins!</p>
-                        <div class="menu-buttons">
-                            <button class="menu-btn start-game-btn">
-                                <span class="fa fa-play"></span>
-                                Select Level
-                            </button>
-                            <button class="menu-btn history-btn">
-                                <span class="fa fa-history"></span>
-                                My History
-                            </button>
-                            <button class="menu-btn leaderboard-btn">
-                                <span class="fa fa-trophy"></span>
-                                Leaderboard
-                            </button>
-                        </div>
-                    </div>
+        <!-- Start Screen -->
+        <div class="start-screen">
+            <div class="start-content">
+                <h1 class="game-title">Crypto Memory Game</h1>
+                <p class="game-subtitle">Test your memory with crypto tokens and coins!</p>
+                <div class="menu-buttons">
+                    <button class="menu-btn start-game-btn">
+                        <span class="fa fa-play"></span>
+                        Select Level
+                    </button>
+                    <button class="menu-btn history-btn">
+                        <span class="fa fa-history"></span>
+                        My History
+                    </button>
+                    <button class="menu-btn leaderboard-btn">
+                        <span class="fa fa-trophy"></span>
+                        Leaderboard
+                    </button>
                 </div>
-
-        <!-- Level Selection Screen -->
+            </div>
+        </div>        <!-- Level Selection Screen -->
         <div class="level-screen" style="display: none;">
             <div class="level-content">
                 <h2 class="level-title">🎯 Choose Your Level</h2>
@@ -206,9 +201,12 @@
                 <h2 class="welcome-title">🪙 Welcome to Crypto Memory Game!</h2>
                 <p class="welcome-message">Test your crypto knowledge and memory skills with popular tokens and coins!</p>
                 <div class="welcome-form">
-                    <label for="welcome-username">Enter your Farcaster username (optional):</label>
-                    <input type="text" id="welcome-username" placeholder="e.g. cryptomaster" maxlength="20">
-                    <p class="welcome-note">Username will be cleaned (lowercase, no spaces). You can skip this and add it later.</p>
+                    <label for="welcome-username">Enter your username (required):</label>
+                    <input type="text" id="welcome-username" placeholder="e.g. cryptomaster" maxlength="20" required>
+                    <p class="welcome-note">Username will be cleaned (lowercase, no spaces, max 15 chars). This is required to start playing.</p>
+                    <div id="welcome-error" class="error-message" style="display: none; color: #ff6b6b; margin-top: 10px;">
+                        Please enter a valid username to continue.
+                    </div>
                 </div>
                 <div class="welcome-buttons">
                     <button id="welcome-start-playing" class="welcome-btn primary">
@@ -221,8 +219,6 @@
         
         <footer>
         </footer>
-            </div><!-- End Phone Screen -->
-        </div><!-- End Phone Container -->
     </div><!-- End Wrap -->
     
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>

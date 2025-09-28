@@ -12,12 +12,13 @@
 	// Initialize Supabase client
 	function initSupabase() {
 		try {
-			if (typeof window.supabase !== 'undefined' && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
-				supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+			// Check if Supabase library is loaded from CDN (it creates global createClient function)
+			if (typeof createClient !== 'undefined' && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
+				supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 				console.log('✅ Supabase initialized successfully');
 				return true;
 			} else {
-				console.warn('⚠️ Supabase not initialized - using local storage fallback');
+				console.warn('⚠️ Supabase library not loaded - using local storage fallback');
 				return false;
 			}
 		} catch (error) {
@@ -51,195 +52,344 @@
 			return now.toISOString().split('T')[0];
 		},
 		
-		// Check global break status (3 consecutive failures trigger 15min break)
+		// Check global break status (3 consecutive losses on NEW levels trigger 15min break)
 		checkGlobalBreakStatus: async function(userId) {
-			if (!supabase) return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
-			
+			const gameDay = this.getGameDay();
+			const now = new Date();
+
+			// Try Supabase first
+			if (supabase) {
+				try {
+					const { data, error } = await supabase
+						.from('user_break_status')
+						.select('consecutive_failures, last_game_result, session_start, break_until')
+						.eq('user_id', userId)
+						.eq('date', gameDay)
+						.single();
+
+					if (error && error.code !== 'PGRST116') {
+						console.error('Error checking break status from Supabase:', error);
+						console.log('🔄 Falling back to localStorage break status');
+						return this.checkBreakStatusFromLocal(userId, gameDay, now);
+					}
+
+					if (!data) {
+						return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
+					}
+
+					const sessionStart = new Date(data.session_start);
+					const breakUntil = data.break_until ? new Date(data.break_until) : null;
+
+					// Check if user is currently on break
+					if (breakUntil && now < breakUntil) {
+						const breakTimeLeft = Math.ceil((breakUntil - now) / 1000);
+						return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, consecutiveFailures: data.consecutive_failures };
+					}
+
+					// Check if break period has expired and reset consecutive failures
+					if (breakUntil && now >= breakUntil) {
+						await supabase
+							.from('user_break_status')
+							.update({
+								consecutive_failures: 0,
+								break_until: null,
+								session_start: now.toISOString(),
+								updated_at: now.toISOString()
+							})
+							.eq('user_id', userId)
+							.eq('date', gameDay);
+
+						// Also update localStorage
+						this.saveBreakStatusToLocal(userId, gameDay, {
+							consecutiveFailures: 0,
+							sessionStart: now,
+							breakUntil: null
+						});
+
+						return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
+					}
+
+					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: data.consecutive_failures || 0 };
+				} catch (error) {
+					console.error('Error checking global break status from Supabase:', error);
+					console.log('🔄 Falling back to localStorage break status');
+					return this.checkBreakStatusFromLocal(userId, gameDay, now);
+				}
+			} else {
+				console.log('⚠️ Supabase not available - using localStorage break status');
+				return this.checkBreakStatusFromLocal(userId, gameDay, now);
+			}
+		},
+
+		// Check break status from localStorage
+		checkBreakStatusFromLocal: function(userId, gameDay, now) {
 			try {
-				const gameDay = this.getGameDay();
-				const now = new Date();
-				
-				const { data, error } = await supabase
-					.from('user_break_status')
-					.select('consecutive_failures, last_game_result, session_start, break_until')
-					.eq('user_id', userId)
-					.eq('date', gameDay)
-					.single();
-				
-				if (error && error.code !== 'PGRST116') {
-					// No record found, user can play
+				const localBreakKey = `breakStatus_${userId}_${gameDay}`;
+				const localData = JSON.parse(localStorage.getItem(localBreakKey) || 'null');
+
+				if (!localData) {
 					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 				}
-				
-				if (!data) {
-					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
-				}
-				
-				const sessionStart = new Date(data.session_start);
-				const breakUntil = data.break_until ? new Date(data.break_until) : null;
-				
+
+				const breakUntil = localData.breakUntil ? new Date(localData.breakUntil) : null;
+
 				// Check if user is currently on break
 				if (breakUntil && now < breakUntil) {
 					const breakTimeLeft = Math.ceil((breakUntil - now) / 1000);
-					return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, consecutiveFailures: data.consecutive_failures };
+					return { canPlay: false, onBreak: true, breakTimeLeft: breakTimeLeft, consecutiveFailures: localData.consecutiveFailures };
 				}
-				
-				// Check if break period has expired and reset consecutive failures
+
+				// Check if break period has expired
 				if (breakUntil && now >= breakUntil) {
-					await supabase
-						.from('user_break_status')
-						.update({
-							consecutive_failures: 0,
-							break_until: null,
-							session_start: now.toISOString(),
-							updated_at: now.toISOString()
-						})
-						.eq('user_id', userId)
-						.eq('date', gameDay);
-					
+					// Reset break status in localStorage
+					const updatedData = {
+						consecutiveFailures: 0,
+						sessionStart: now.toISOString(),
+						breakUntil: null
+					};
+					localStorage.setItem(localBreakKey, JSON.stringify(updatedData));
 					return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 				}
-				
-				return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: data.consecutive_failures || 0 };
+
+				return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: localData.consecutiveFailures || 0 };
 			} catch (error) {
-				console.error('Error checking global break status:', error);
+				console.error('Error checking break status from localStorage:', error);
 				return { canPlay: true, onBreak: false, breakTimeLeft: 0, consecutiveFailures: 0 };
 			}
 		},
 
-		// Check daily game limit for a specific level
+		// Check daily game limit for a specific level (with localStorage sync)
 		checkDailyLimit: async function(userId, level) {
-			if (!supabase) return { canPlay: true, gamesLeft: 6 };
-			
-			try {
-				const gameDay = this.getGameDay();
-				const { data, error } = await supabase
-					.from('daily_games')
-					.select('games_played')
-					.eq('user_id', userId)
-					.eq('level', level)
-					.eq('date', gameDay)
-					.single();
-				
-				if (error && error.code !== 'PGRST116') {
-					console.error('Error checking daily limit:', error);
-					return { canPlay: true, gamesLeft: 6 };
+			const gameDay = this.getGameDay();
+
+			// Try Supabase first
+			if (supabase) {
+				try {
+					const { data, error } = await supabase
+						.from('daily_games')
+						.select('games_played')
+						.eq('user_id', userId)
+						.eq('level', level)
+						.eq('date', gameDay)
+						.single();
+
+					if (error && error.code !== 'PGRST116') {
+						console.error('Error checking daily limit from Supabase:', error);
+						console.log('🔄 Falling back to localStorage daily limit');
+						return this.checkDailyLimitFromLocal(userId, level, gameDay);
+					}
+
+					const gamesPlayed = data ? data.games_played : 0;
+					const gamesLeft = Math.max(0, 6 - gamesPlayed);
+
+					// Sync to localStorage
+					this.saveDailyGamesToLocal(userId, level, gameDay, gamesPlayed);
+
+					return {
+						canPlay: gamesLeft > 0,
+						gamesLeft: gamesLeft,
+						gamesPlayed: gamesPlayed
+					};
+				} catch (error) {
+					console.error('Error checking daily limit from Supabase:', error);
+					console.log('🔄 Falling back to localStorage daily limit');
+					return this.checkDailyLimitFromLocal(userId, level, gameDay);
 				}
-				
-				const gamesPlayed = data ? data.games_played : 0;
+			} else {
+				console.log('⚠️ Supabase not available - using localStorage daily limit');
+				return this.checkDailyLimitFromLocal(userId, level, gameDay);
+			}
+		},
+
+		// Check daily limit from localStorage
+		checkDailyLimitFromLocal: function(userId, level, gameDay) {
+			try {
+				const localKey = `dailyGames_${userId}_${level}_${gameDay}`;
+				const gamesPlayed = parseInt(localStorage.getItem(localKey) || '0');
 				const gamesLeft = Math.max(0, 6 - gamesPlayed);
-				
+
 				return {
 					canPlay: gamesLeft > 0,
 					gamesLeft: gamesLeft,
 					gamesPlayed: gamesPlayed
 				};
 			} catch (error) {
-				console.error('Error checking daily limit:', error);
-				return { canPlay: true, gamesLeft: 6 };
-			}
-		},
-		
-		// Update daily game count for specific level
-		updateDailyGameCount: async function(userId, level) {
-			if (!supabase) return;
-			
-			try {
-				const gameDay = this.getGameDay();
-				
-				// Get current games played for this level
-				const { data: currentData } = await supabase
-					.from('daily_games')
-					.select('games_played')
-					.eq('user_id', userId)
-					.eq('level', level)
-					.eq('date', gameDay)
-					.single();
-				
-				const currentGames = currentData ? currentData.games_played : 0;
-				const newGameCount = currentGames + 1;
-				
-				await supabase
-					.from('daily_games')
-					.upsert({
-						user_id: userId,
-						level: level,
-						date: gameDay,
-						games_played: newGameCount
-					}, {
-						onConflict: 'user_id,level,date'
-					});
-				
-				return { gamesPlayed: newGameCount };
-			} catch (error) {
-				console.error('Error updating daily count:', error);
-				return null;
+				console.error('Error checking daily limit from localStorage:', error);
+				return { canPlay: true, gamesLeft: 6, gamesPlayed: 0 };
 			}
 		},
 
-		// Record game outcome and update break status (3 consecutive failures trigger 15min break)
-		recordGameOutcome: async function(userId, gameResult) {
-			if (!supabase) return;
-			
+		// Save daily games count to localStorage
+		saveDailyGamesToLocal: function(userId, level, gameDay, gamesPlayed) {
 			try {
-				const gameDay = this.getGameDay();
-				const now = new Date();
-				
-				// Get current break status
-				const { data: currentData } = await supabase
-					.from('user_break_status')
-					.select('consecutive_failures, last_game_result, session_start')
-					.eq('user_id', userId)
-					.eq('date', gameDay)
-					.single();
-				
-				let consecutiveFailures = 0;
-				let sessionStart = now;
-				
-				if (currentData) {
-					sessionStart = new Date(currentData.session_start);
-					
-					if (gameResult === 'fail') {
-						// Increment consecutive failures
-						consecutiveFailures = (currentData.consecutive_failures || 0) + 1;
-					} else if (gameResult === 'win') {
-						// Reset consecutive failures on win
-						consecutiveFailures = 0;
-					}
-				} else {
-					// First game for this user/day
-					consecutiveFailures = gameResult === 'fail' ? 1 : 0;
-				}
-				
-				let breakUntil = null;
-				
-				// If user has 3 consecutive failures, set break time
-				if (consecutiveFailures >= 3) {
-					breakUntil = new Date(now.getTime() + 15 * 60 * 1000); // 15 min from now
-				}
-				
-				await supabase
-					.from('user_break_status')
-					.upsert({
-						user_id: userId,
-						date: gameDay,
-						consecutive_failures: consecutiveFailures,
-						last_game_result: gameResult,
-						session_start: sessionStart.toISOString(),
-						break_until: breakUntil ? breakUntil.toISOString() : null,
-						updated_at: now.toISOString()
-					}, {
-						onConflict: 'user_id,date'
-					});
-				
-				return {
-					consecutiveFailures: consecutiveFailures,
-					onBreak: breakUntil !== null,
-					breakUntil: breakUntil
-				};
+				const localKey = `dailyGames_${userId}_${level}_${gameDay}`;
+				localStorage.setItem(localKey, gamesPlayed.toString());
 			} catch (error) {
-				console.error('Error recording game outcome:', error);
-				return null;
+				console.error('Error saving daily games to localStorage:', error);
+			}
+		},
+		
+		// Update daily game count for specific level (syncs with localStorage)
+		updateDailyGameCount: async function(userId, level) {
+			const gameDay = this.getGameDay();
+
+			// Always update localStorage first
+			const localResult = this.updateDailyGameCountLocal(userId, level, gameDay);
+
+			// Try to update Supabase
+			if (supabase) {
+				try {
+					const { data: currentData } = await supabase
+						.from('daily_games')
+						.select('games_played')
+						.eq('user_id', userId)
+						.eq('level', level)
+						.eq('date', gameDay)
+						.single();
+
+					const currentGames = currentData ? currentData.games_played : 0;
+					const newGameCount = currentGames + 1;
+
+					await supabase
+						.from('daily_games')
+						.upsert({
+							user_id: userId,
+							level: level,
+							date: gameDay,
+							games_played: newGameCount
+						}, {
+							onConflict: 'user_id,level,date'
+						});
+
+					console.log('✅ Daily game count updated in both Supabase and localStorage');
+					return { gamesPlayed: newGameCount };
+				} catch (error) {
+					console.error('Error updating daily count in Supabase:', error);
+					console.log('✅ Daily game count updated in localStorage only');
+					return localResult;
+				}
+			} else {
+				console.log('⚠️ Supabase not available - daily game count updated in localStorage only');
+				return localResult;
+			}
+		},
+
+		// Update daily game count in localStorage
+		updateDailyGameCountLocal: function(userId, level, gameDay) {
+			try {
+				const localKey = `dailyGames_${userId}_${level}_${gameDay}`;
+				const currentGames = parseInt(localStorage.getItem(localKey) || '0');
+				const newGameCount = currentGames + 1;
+
+				localStorage.setItem(localKey, newGameCount.toString());
+				console.log('💾 Daily game count updated in localStorage');
+
+				return { gamesPlayed: newGameCount };
+			} catch (error) {
+				console.error('Error updating daily count in localStorage:', error);
+				return { gamesPlayed: 0 };
+			}
+		},
+
+		// Record game outcome and update break status (3 consecutive losses on NEW levels trigger 15min break)
+		recordGameOutcome: async function(userId, gameResult, level) {
+			const gameDay = this.getGameDay();
+			const now = new Date();
+
+			// Calculate break status locally first
+			const breakStatus = this.calculateBreakStatus(userId, gameResult, level, gameDay);
+
+			// Always save to localStorage
+			this.saveBreakStatusToLocal(userId, gameDay, breakStatus);
+
+			// Try to save to Supabase
+			if (supabase) {
+				try {
+					await supabase
+						.from('user_break_status')
+						.upsert({
+							user_id: userId,
+							date: gameDay,
+							consecutive_failures: breakStatus.consecutiveFailures,
+							last_game_result: gameResult,
+							session_start: breakStatus.sessionStart.toISOString(),
+							break_until: breakStatus.breakUntil ? breakStatus.breakUntil.toISOString() : null,
+							updated_at: now.toISOString()
+						}, {
+							onConflict: 'user_id,date'
+						});
+
+					console.log('✅ Break status saved to both Supabase and localStorage');
+				} catch (error) {
+					console.error('Error recording game outcome to Supabase:', error);
+					console.log('✅ Break status saved to localStorage only');
+				}
+			} else {
+				console.log('⚠️ Supabase not available - break status saved to localStorage only');
+			}
+
+			return breakStatus;
+		},
+
+		// Calculate break status (helper method) - only counts losses on NEW levels
+		calculateBreakStatus: function(userId, gameResult, level, gameDay) {
+			const now = new Date();
+
+			// Check if this level has been completed before (is it a "new" level?)
+			const isNewLevel = !GameManager.isLevelCompleted(level);
+
+			// Get current break status from localStorage
+			const localBreakKey = `breakStatus_${userId}_${gameDay}`;
+			const currentData = JSON.parse(localStorage.getItem(localBreakKey) || 'null');
+
+			let consecutiveFailures = 0;
+			let sessionStart = now;
+
+			if (currentData) {
+				sessionStart = new Date(currentData.sessionStart);
+
+				if (gameResult === 'fail' && isNewLevel) {
+					// Only count failures on new levels
+					consecutiveFailures = (currentData.consecutiveFailures || 0) + 1;
+				} else if (gameResult === 'win') {
+					// Wins reset the counter
+					consecutiveFailures = 0;
+				} else {
+					// Keep existing count for other cases (fail on completed level)
+					consecutiveFailures = currentData.consecutiveFailures || 0;
+				}
+			} else {
+				consecutiveFailures = (gameResult === 'fail' && isNewLevel) ? 1 : 0;
+			}
+
+			let breakUntil = null;
+			if (consecutiveFailures >= 3) {
+				breakUntil = new Date(now.getTime() + 15 * 60 * 1000); // 15 min from now
+			}
+
+			return {
+				consecutiveFailures: consecutiveFailures,
+				sessionStart: sessionStart,
+				breakUntil: breakUntil,
+				onBreak: breakUntil !== null
+			};
+		},
+
+		// Save break status to localStorage
+		saveBreakStatusToLocal: function(userId, gameDay, breakStatus) {
+			try {
+				const localBreakKey = `breakStatus_${userId}_${gameDay}`;
+				const localData = {
+					consecutiveFailures: breakStatus.consecutiveFailures,
+					sessionStart: breakStatus.sessionStart.toISOString(),
+					breakUntil: breakStatus.breakUntil ? breakStatus.breakUntil.toISOString() : null,
+					lastUpdated: new Date().toISOString()
+				};
+
+				localStorage.setItem(localBreakKey, JSON.stringify(localData));
+				console.log('💾 Break status saved to localStorage');
+			} catch (error) {
+				console.error('Error saving break status to localStorage:', error);
 			}
 		},
 		
@@ -250,64 +400,193 @@
 			return width * height * timeRemaining;
 		},
 		
-		// Save game result to weekly leaderboard
+		// Save game result to weekly leaderboard (syncs with localStorage)
 		saveGameResult: async function(userId, username, level, timeRemaining, moves) {
-			if (!supabase) return;
-			
-			try {
-				const week = this.getCurrentWeek();
-				const score = this.calculateScore(level, timeRemaining);
-				
-				const gameResult = {
-					user_id: userId,
-					username: username,
-					level: level,
-					score: score,
-					time_remaining: timeRemaining,
-					moves: moves,
-					week: week,
-					created_at: new Date().toISOString()
-				};
-				
-				const { data, error } = await supabase
-					.from('weekly_scores')
-					.insert([gameResult]);
-				
-				if (error) {
-					console.error('Error saving game result:', error);
+			const week = this.getCurrentWeek();
+			const score = this.calculateScore(level, timeRemaining);
+
+			const gameResult = {
+				user_id: userId,
+				username: username,
+				level: level,
+				score: score,
+				time_remaining: timeRemaining,
+				moves: moves,
+				week: week,
+				created_at: new Date().toISOString()
+			};
+
+			// Always save to localStorage as backup
+			this.saveGameResultToLocal(gameResult);
+
+			// Try to save to Supabase
+			if (supabase) {
+				try {
+					const { data, error } = await supabase
+						.from('weekly_scores')
+						.insert([gameResult]);
+
+					if (error) {
+						console.error('Error saving game result to Supabase:', error);
+						console.log('✅ Game result saved to localStorage only');
+						return false;
+					}
+
+					console.log('✅ Game result saved to both Supabase and localStorage');
+					return true;
+				} catch (error) {
+					console.error('Error saving game result to Supabase:', error);
+					console.log('✅ Game result saved to localStorage only');
 					return false;
 				}
-				
-				return true;
-			} catch (error) {
-				console.error('Error saving game result:', error);
+			} else {
+				console.log('⚠️ Supabase not available - game result saved to localStorage only');
 				return false;
 			}
 		},
-		
-		// Get weekly leaderboard
-		getWeeklyLeaderboard: async function(week = null) {
-			if (!supabase) return [];
-			
+
+		// Save game result to localStorage (helper method)
+		saveGameResultToLocal: function(gameResult) {
 			try {
-				const targetWeek = week || this.getCurrentWeek();
-				
-				const { data, error } = await supabase
-					.from('weekly_scores')
-					.select('*')
-					.eq('week', targetWeek)
-					.order('score', { ascending: false })
-					.limit(100);
-				
-				if (error) {
-					console.error('Error fetching leaderboard:', error);
-					return [];
+				// Convert Supabase format to localStorage format
+				const localResult = {
+					id: Date.now(),
+					date: new Date().toLocaleString(),
+					timestamp: Date.now(),
+					moves: gameResult.moves,
+					time: `${Math.floor(gameResult.time_remaining / 60)}:${(gameResult.time_remaining % 60).toString().padStart(2, '0')}`,
+					timeSeconds: gameResult.time_remaining,
+					score: gameResult.score,
+					player: gameResult.username,
+					level: gameResult.level,
+					week: gameResult.week
+				};
+
+				// Save to personal history
+				let history = JSON.parse(localStorage.getItem('memoryGameHistory') || '[]');
+				history.unshift(localResult);
+				if (history.length > 10) {
+					history = history.slice(0, 10);
 				}
-				
-				return data || [];
+				localStorage.setItem('memoryGameHistory', JSON.stringify(history));
+
+				// Save to global leaderboard
+				let leaderboard = JSON.parse(localStorage.getItem('memoryGameLeaderboard') || '[]');
+				leaderboard.push(localResult);
+
+				// Sort by score (descending) then by time (ascending)
+				leaderboard.sort(function(a, b) {
+					if (b.score !== a.score) return b.score - a.score;
+					return a.timeSeconds - b.timeSeconds;
+				});
+
+				// Keep top 100 scores
+				if (leaderboard.length > 100) {
+					leaderboard = leaderboard.slice(0, 100);
+				}
+
+				localStorage.setItem('memoryGameLeaderboard', JSON.stringify(leaderboard));
+
+				console.log('💾 Game result saved to localStorage');
 			} catch (error) {
-				console.error('Error fetching leaderboard:', error);
+				console.error('Error saving to localStorage:', error);
+			}
+		},
+		
+		// Get weekly leaderboard (with localStorage fallback)
+		getWeeklyLeaderboard: async function(week = null) {
+			const targetWeek = week || this.getCurrentWeek();
+
+			// Try Supabase first
+			if (supabase) {
+				try {
+					const { data, error } = await supabase
+						.from('weekly_scores')
+						.select('*')
+						.eq('week', targetWeek)
+						.order('score', { ascending: false })
+						.limit(100);
+
+					if (error) {
+						console.error('Error fetching leaderboard from Supabase:', error);
+						console.log('🔄 Falling back to localStorage leaderboard');
+						return this.getWeeklyLeaderboardFromLocal(targetWeek);
+					}
+
+					// Sync Supabase data to localStorage for consistency
+					this.syncLeaderboardToLocal(data, targetWeek);
+					return data || [];
+				} catch (error) {
+					console.error('Error fetching leaderboard from Supabase:', error);
+					console.log('🔄 Falling back to localStorage leaderboard');
+					return this.getWeeklyLeaderboardFromLocal(targetWeek);
+				}
+			} else {
+				console.log('⚠️ Supabase not available - using localStorage leaderboard');
+				return this.getWeeklyLeaderboardFromLocal(targetWeek);
+			}
+		},
+
+		// Get weekly leaderboard from localStorage
+		getWeeklyLeaderboardFromLocal: function(week) {
+			try {
+				const leaderboard = JSON.parse(localStorage.getItem('memoryGameLeaderboard') || '[]');
+				// Filter by week if available
+				const weeklyScores = leaderboard.filter(game => !week || game.week === week);
+				return weeklyScores.slice(0, 100);
+			} catch (error) {
+				console.error('Error reading leaderboard from localStorage:', error);
 				return [];
+			}
+		},
+
+		// Sync Supabase leaderboard data to localStorage
+		syncLeaderboardToLocal: function(supabaseData, week) {
+			try {
+				let localLeaderboard = JSON.parse(localStorage.getItem('memoryGameLeaderboard') || '[]');
+
+				// Merge Supabase data with local data
+				supabaseData.forEach(supabaseGame => {
+					// Convert Supabase format to local format
+					const localGame = {
+						id: Date.now() + Math.random(),
+						date: new Date(supabaseGame.created_at).toLocaleString(),
+						timestamp: new Date(supabaseGame.created_at).getTime(),
+						moves: supabaseGame.moves,
+						time: `${Math.floor(supabaseGame.time_remaining / 60)}:${(supabaseGame.time_remaining % 60).toString().padStart(2, '0')}`,
+						timeSeconds: supabaseGame.time_remaining,
+						score: supabaseGame.score,
+						player: supabaseGame.username,
+						level: supabaseGame.level,
+						week: supabaseGame.week
+					};
+
+					// Check if this game already exists in localStorage
+					const existingIndex = localLeaderboard.findIndex(game =>
+						game.player === localGame.player &&
+						game.score === localGame.score &&
+						game.timestamp === localGame.timestamp
+					);
+
+					if (existingIndex === -1) {
+						localLeaderboard.push(localGame);
+					}
+				});
+
+				// Sort and limit
+				localLeaderboard.sort((a, b) => {
+					if (b.score !== a.score) return b.score - a.score;
+					return a.timeSeconds - b.timeSeconds;
+				});
+
+				if (localLeaderboard.length > 100) {
+					localLeaderboard = localLeaderboard.slice(0, 100);
+				}
+
+				localStorage.setItem('memoryGameLeaderboard', JSON.stringify(localLeaderboard));
+				console.log('🔄 Leaderboard synced from Supabase to localStorage');
+			} catch (error) {
+				console.error('Error syncing leaderboard to localStorage:', error);
 			}
 		},
 		
@@ -336,63 +615,114 @@
 			}
 		},
 
-		// Create or update user profile
+		// Create or update user profile (syncs with localStorage)
 		createOrUpdateUserProfile: async function(userId, username) {
-			if (!supabase || !username || username === 'Anonymous') return;
-			
-			try {
-				// Check if profile exists
-				const { data: existingProfile, error: fetchError } = await supabase
-					.from('user_profiles')
-					.select('id, username')
-					.eq('user_id', userId)
-					.single();
-				
-				if (fetchError && fetchError.code !== 'PGRST116') {
-					console.error('Error checking user profile:', fetchError);
-					return;
-				}
-				
-				if (existingProfile) {
-					// Update existing profile if username changed
-					if (existingProfile.username !== username) {
-						const { error: updateError } = await supabase
+			if (!username || username === 'Anonymous') return;
+
+			// Always save to localStorage first
+			this.saveUsernameToLocal(username);
+
+			// Try to save to Supabase
+			if (supabase) {
+				try {
+					// Check if profile exists
+					const { data: existingProfile, error: fetchError } = await supabase
+						.from('user_profiles')
+						.select('id, username')
+						.eq('user_id', userId)
+						.single();
+
+					if (fetchError && fetchError.code !== 'PGRST116') {
+						console.error('Error checking user profile:', fetchError);
+						console.log('✅ Username saved to localStorage only');
+						return;
+					}
+
+					if (existingProfile) {
+						// Update existing profile if username changed
+						if (existingProfile.username !== username) {
+							const { error: updateError } = await supabase
+								.from('user_profiles')
+								.update({
+									username: username,
+									updated_at: new Date().toISOString()
+								})
+								.eq('user_id', userId);
+
+							if (updateError) {
+								console.error('Error updating user profile:', updateError);
+								console.log('✅ Username updated in localStorage only');
+							} else {
+								console.log('✅ Username updated in both Supabase and localStorage');
+							}
+						}
+					} else {
+						// Create new profile
+						const { error: insertError } = await supabase
 							.from('user_profiles')
-							.update({ 
+							.insert([{
+								user_id: userId,
 								username: username,
+								created_at: new Date().toISOString(),
 								updated_at: new Date().toISOString()
-							})
-							.eq('user_id', userId);
-						
-						if (updateError) {
-							console.error('Error updating user profile:', updateError);
+							}]);
+
+						if (insertError) {
+							console.error('Error creating user profile:', insertError);
+							console.log('✅ Username saved to localStorage only');
+						} else {
+							console.log('✅ Username saved to both Supabase and localStorage');
 						}
 					}
-				} else {
-					// Create new profile
-					const { error: insertError } = await supabase
-						.from('user_profiles')
-						.insert([{
-							user_id: userId,
-							username: username,
-							created_at: new Date().toISOString(),
-							updated_at: new Date().toISOString()
-						}]);
+				} catch (error) {
+					console.error('Error managing user profile:', error);
+					console.log('✅ Username saved to localStorage only');
+				}
+			} else {
+				console.log('⚠️ Supabase not available - username saved to localStorage only');
+			}
+		},
+
+		// Save username to localStorage
+		saveUsernameToLocal: function(username) {
+			try {
+				localStorage.setItem('memoryGamePlayerName', username);
+				console.log('💾 Username saved to localStorage');
+			} catch (error) {
+				console.error('Error saving username to localStorage:', error);
+			}
+		},
+
+		// Load username from localStorage (with Supabase sync if available)
+		loadUsernameFromLocal: async function(userId) {
+			try {
+				const localUsername = localStorage.getItem('memoryGamePlayerName');
+				if (localUsername && localUsername !== 'Anonymous') {
+					console.log('📖 Username loaded from localStorage:', localUsername);
 					
-					if (insertError) {
-						console.error('Error creating user profile:', insertError);
+					// Try to sync with Supabase if available
+					if (supabase && userId) {
+						try {
+							await this.createOrUpdateUserProfile(userId, localUsername);
+						} catch (error) {
+							console.error('Error syncing username to Supabase:', error);
+						}
 					}
+					
+					return localUsername;
 				}
 			} catch (error) {
-				console.error('Error managing user profile:', error);
+				console.error('Error loading username from localStorage:', error);
 			}
-		}
+			return null;
+		},
 	};
 	
 	var GameManager = {
 		currentUserId: null,
 		
 		init: async function() {
+			console.log('🎮 GameManager.init() called');
 			initSupabase();
 			this.generateUserId();
 			await this.loadUsernameFromDatabase();
@@ -401,6 +731,64 @@
 			this.loadLeaderboard();
 			this.loadLevelProgress();
 			this.checkFirstTimeUser();
+			console.log('🎮 GameManager.init() completed');
+
+			// Debug storage information
+			this.debugStorageInfo();
+		},
+
+		debugStorageInfo: function() {
+			console.log('🔍 STORAGE DEBUG INFORMATION:');
+			console.log('================================');
+
+			// Check localStorage items
+			console.log('📱 LOCAL STORAGE:');
+			const localStorageKeys = [
+				'crypto_memory_user_id',
+				'memoryGamePlayerName',
+				'memoryGameHistory',
+				'memoryGameLeaderboard',
+				'memoryGamePlayerVisited',
+				'memoryGameCompletedLevels',
+				'memoryGameLevelCompletions'
+			];
+
+			localStorageKeys.forEach(key => {
+				const value = localStorage.getItem(key);
+				if (value) {
+					console.log(`  ${key}:`, value.length > 100 ? value.substring(0, 100) + '...' : value);
+				} else {
+					console.log(`  ${key}: (not set)`);
+				}
+			});
+
+			// Check Supabase connection
+			console.log('🗄️  DATABASE STATUS:');
+			console.log('  Supabase initialized:', !!supabase);
+			console.log('  Current User ID:', this.currentUserId);
+
+			// Test database connectivity
+			if (supabase) {
+				this.testDatabaseConnection();
+			} else {
+				console.log('  ❌ Database not available - using localStorage fallback');
+			}
+
+			console.log('================================');
+		},
+
+		testDatabaseConnection: async function() {
+			try {
+				console.log('  Testing database connection...');
+				const { data, error } = await supabase.from('user_profiles').select('count').limit(1);
+				if (error) {
+					console.log('  ❌ Database connection failed:', error.message);
+				} else {
+					console.log('  ✅ Database connection successful');
+				}
+			} catch (err) {
+				console.log('  ❌ Database connection error:', err.message);
+			}
 		},
 		
 		generateUserId: function() {
@@ -414,29 +802,39 @@
 		},
 
 		loadUsernameFromDatabase: async function() {
-			if (!supabase || !this.currentUserId) return;
+			// First try to load from localStorage
+			const localUsername = await DatabaseManager.loadUsernameFromLocal(this.currentUserId);
 			
-			try {
-				const { data, error } = await supabase
-					.from('user_profiles')
-					.select('username')
-					.eq('user_id', this.currentUserId)
-					.single();
-				
-				if (error && error.code !== 'PGRST116') {
-					console.error('Error loading username:', error);
-					return;
-				}
-				
-				if (data && data.username) {
-					// Only update localStorage if we don't have a local username or if database username is different
-					const localUsername = localStorage.getItem('memoryGamePlayerName');
-					if (!localUsername || localUsername === 'Anonymous') {
-						localStorage.setItem('memoryGamePlayerName', data.username);
+			if (localUsername) {
+				// Update the UI with the local username
+				$('#playerName').val(localUsername);
+				console.log('✅ Username loaded from localStorage:', localUsername);
+				return;
+			}
+			
+			// If no local username, try to load from Supabase
+			if (supabase && this.currentUserId) {
+				try {
+					const { data, error } = await supabase
+						.from('user_profiles')
+						.select('username')
+						.eq('user_id', this.currentUserId)
+						.single();
+					
+					if (error && error.code !== 'PGRST116') {
+						console.error('Error loading username from Supabase:', error);
+						return;
 					}
+					
+					if (data && data.username) {
+						// Save to localStorage and update UI
+						await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, data.username);
+						$('#playerName').val(data.username);
+						console.log('✅ Username loaded from Supabase and synced to localStorage:', data.username);
+					}
+				} catch (error) {
+					console.error('Error syncing username from Supabase:', error);
 				}
-			} catch (error) {
-				console.error('Error syncing username:', error);
 			}
 		},
 
@@ -463,7 +861,7 @@
 						Memory.paused = true;
 
 						// Record the game as a loss
-						DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail').then(async (globalResult) => {
+						DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail', Memory.currentLevel).then(async (globalResult) => {
 							// Update daily game count for this level
 							await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, Memory.currentLevel);
 
@@ -471,7 +869,7 @@
 							if (globalResult && globalResult.onBreak) {
 								setTimeout(() => {
 									const failures = globalResult.consecutiveFailures;
-									alert(`You've failed ${failures} games in a row. Take a 15-minute break before playing again!`);
+									alert(`You've lost ${failures} times in a row on new levels. Take a 15-minute break before playing again!`);
 								}, 500);
 							}
 						});
@@ -538,6 +936,11 @@
 
 			$('#welcome-start-playing').on('click', async function() {
 				await GameManager.handleWelcomeStart();
+			});
+
+			// Clear error message when user starts typing in welcome username field
+			$('#welcome-username').on('input', function() {
+				$('#welcome-error').hide();
 			});
 		},
 
@@ -853,9 +1256,8 @@
 			if (name && name.length > 0) {
 				// Clean username for Farcaster-style format
 				var cleanName = this.cleanUsername(name);
-				localStorage.setItem('memoryGamePlayerName', cleanName);
 				
-				// Also save to database
+				// Save to both localStorage and Supabase via DatabaseManager
 				await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, cleanName);
 				
 				alert('Name saved! Your future games will be recorded under "' + cleanName + '"');
@@ -869,22 +1271,33 @@
 		handleWelcomeStart: async function() {
 			// Get username from welcome form
 			var username = $('#welcome-username').val().trim();
-			if (username && username.length > 0) {
-				// Clean and save the username
-				var cleanUsername = this.cleanUsername(username);
-				localStorage.setItem('memoryGamePlayerName', cleanUsername);
 
-				// Also save to database immediately
-				try {
-					await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, cleanUsername);
-					console.log('✅ Welcome username saved to database:', cleanUsername);
-				} catch (error) {
-					console.error('❌ Failed to save welcome username to database:', error);
-					// Continue anyway - localStorage will preserve it
-				}
-			} else {
-				console.log('ℹ️ No username entered in welcome modal');
+			// Validate that username is provided
+			if (!username || username.length === 0) {
+				$('#welcome-error').show();
+				$('#welcome-username').focus();
+				return; // Don't proceed
 			}
+
+			// Clean the username
+			var cleanUsername = this.cleanUsername(username);
+
+			// Validate cleaned username is not empty
+			if (!cleanUsername || cleanUsername.length === 0) {
+				$('#welcome-error').text('Please enter a valid username (letters, numbers, underscores only).');
+				$('#welcome-error').show();
+				$('#welcome-username').focus();
+				return; // Don't proceed
+			}
+
+			// Hide any previous error
+			$('#welcome-error').hide();
+
+			// Save the username using DatabaseManager (handles both localStorage and Supabase)
+			await DatabaseManager.createOrUpdateUserProfile(this.currentUserId, cleanUsername);
+			console.log('✅ Welcome username saved to both localStorage and database:', cleanUsername);
+
+			// Proceed to hide modal and start game
 			this.hideFirstTimeModal();
 		},
 
@@ -1245,7 +1658,7 @@
 			await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, this.currentLevel);
 			
 			// Record game failure and update break status
-			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail');
+			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'fail', this.currentLevel);
 			
 			this.showGameOverModal();
 			
@@ -1393,12 +1806,13 @@
 			await DatabaseManager.updateDailyGameCount(GameManager.currentUserId, this.currentLevel);
 			
 			// Record game win and update break status (resets consecutive failures)
-			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'win');
+			const globalResult = await DatabaseManager.recordGameOutcome(GameManager.currentUserId, 'win', this.currentLevel);
 			
 			// Show break notification if needed (though this shouldn't happen on wins)
 			if (globalResult && globalResult.onBreak) {
 				setTimeout(() => {
-					alert('You\'ve failed 3 games in a row. Take a 15-minute break before playing again!');
+					const failures = globalResult.consecutiveFailures;
+					alert(`You've lost ${failures} times in a row on new levels. Take a 15-minute break!`);
 				}, 2000);
 			}
 			
@@ -1612,5 +2026,49 @@
 	$(document).ready(async function() {
 		await GameManager.init();
 	});
+
+	// Make debug functions available globally
+	window.debugStorage = function() {
+		if (GameManager && GameManager.debugStorageInfo) {
+			GameManager.debugStorageInfo();
+		} else {
+			console.log('GameManager not initialized yet');
+		}
+	};
+
+	window.testStorage = function() {
+		console.log('🧪 TESTING STORAGE FUNCTIONS:');
+
+		// Test localStorage
+		console.log('Testing localStorage...');
+		localStorage.setItem('test_key', 'test_value_' + Date.now());
+		const testValue = localStorage.getItem('test_key');
+		console.log('localStorage test:', testValue ? '✅ Working' : '❌ Failed');
+
+		// Test database if available
+		if (supabase) {
+			console.log('Testing database...');
+			GameManager.testDatabaseConnection();
+		} else {
+			console.log('Database not available');
+		}
+	};
+
+	window.testRequiredUsername = function() {
+		console.log('🧪 TESTING REQUIRED USERNAME FUNCTIONALITY:');
+		console.log('================================');
+
+		// Clear any existing username to simulate first-time user
+		localStorage.removeItem('memoryGamePlayerName');
+		localStorage.removeItem('memoryGamePlayerVisited');
+
+		console.log('✅ Cleared existing username data to simulate first-time user');
+		console.log('✅ First-time modal should now require username input');
+		console.log('✅ User cannot proceed without entering a valid username');
+		console.log('✅ Error message should show if username is empty or invalid');
+
+		console.log('To test: Refresh the page and try to start playing without entering a username');
+		console.log('================================');
+	};
 
 })();
