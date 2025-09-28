@@ -1621,6 +1621,7 @@
 			this.moves = 0;
 			this.timeLeft = this.levelConfig.timeLimit;
 			this.timer = null;
+			this.gameEnded = false; // Initialize game ended flag
 			this.updateMoveCounter();
 			this.updateTimer();
 			this.startTimer();
@@ -1631,7 +1632,7 @@
 				this.timeLeft--;
 				this.updateTimer();
 				
-				if (this.timeLeft <= 0) {
+				if (this.timeLeft <= 0 && !this.gameEnded) {
 					this.timeUp();
 				}
 			}, 1000);
@@ -1651,6 +1652,9 @@
 		},
 
 		timeUp: async function() {
+			if (this.gameEnded) return; // Prevent multiple calls
+			
+			this.gameEnded = true;
 			this.paused = true;
 			this.stopTimer();
 			
@@ -1784,6 +1788,7 @@
 		},
 
 		win: async function(){
+			this.gameEnded = true; // Mark game as ended
 			this.paused = true;
 			this.stopTimer();
 			var finalTime = $('.time-count').text();
@@ -1814,6 +1819,12 @@
 					const failures = globalResult.consecutiveFailures;
 					alert(`You've lost ${failures} times in a row on new levels. Take a 15-minute break!`);
 				}, 2000);
+			}
+			
+			// Special handling for level 6 (final level) - show congratulations and redirect to menu
+			if (this.currentLevel === 6) {
+				this.showCongratulationsScreen();
+				return; // Don't show regular win modal
 			}
 			
 			// Handle level completion and unlocking
@@ -1874,9 +1885,43 @@
 			}, 1000);
 		},
 
-		showModal: function(){
-			this.$overlay.show();
-			this.$modal.fadeIn("slow");
+		showCongratulationsScreen: function() {
+			// Create congratulations modal
+			var congratsModal = `
+				<div class="congratulations-modal-overlay" style="display: none;">
+					<div class="congratulations-modal">
+						<div class="congrats-content">
+							<div class="congrats-icon">👑</div>
+							<h1 class="congrats-title">Congratulations!</h1>
+							<p class="congrats-message">You've mastered all levels of the Crypto Memory Game!</p>
+							<div class="congrats-stats">
+								<p>🎯 All 6 levels completed</p>
+								<p>🧠 Memory skills sharpened</p>
+								<p>₿ Crypto knowledge expanded</p>
+							</div>
+							<p class="congrats-redirect">Redirecting to main menu...</p>
+						</div>
+					</div>
+				</div>
+			`;
+			
+			// Add to body if it doesn't exist
+			if (!$('.congratulations-modal-overlay').length) {
+				$('body').append(congratsModal);
+			}
+			
+			// Hide game elements
+			$('.game-header').hide();
+			this.$game.hide();
+			
+			// Show congratulations modal
+			$('.congratulations-modal-overlay').fadeIn();
+			
+			// Redirect to main menu after 5 seconds
+			setTimeout(function() {
+				GameManager.showStartScreen();
+				$('.congratulations-modal-overlay').remove(); // Clean up modal
+			}, 5000);
 		},
 
 		hideModal: function(){
@@ -2019,7 +2064,7 @@
 		{ level: 3, name: "Medium", grid: "4x4", pairs: 8, cards: 16, timeLimit: 60 },
 		{ level: 4, name: "Hard", grid: "4x5", pairs: 10, cards: 20, timeLimit: 60 },
 		{ level: 5, name: "Expert", grid: "6x4", pairs: 12, cards: 24, timeLimit: 60 },
-		{ level: 6, name: "Master", grid: "6x5", pairs: 15, cards: 30, timeLimit: 60 }
+		{ level: 6, name: "Master", grid: "6x5", pairs: 15, cards: 30, timeLimit: 120 }
 	];
     
 	// Initialize the game manager when the page loads
