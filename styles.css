@@ -19,6 +19,69 @@ body {
   padding-bottom: 20px;
 }
 
+/* Phone-like container for desktop */
+.phone-container {
+  display: none;
+}
+
+@media (min-width: 769px) {
+  .phone-container {
+    display: block;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 375px;
+    height: 667px;
+    background: #000;
+    border-radius: 30px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    border: 12px solid #333;
+    z-index: 1000;
+  }
+
+  .phone-notch {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 150px;
+    height: 25px;
+    background: #000;
+    border-radius: 0 0 15px 15px;
+    z-index: 10;
+  }
+
+  .phone-screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  .wrap {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f23 100%);
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* Mobile styles - ensure full screen on actual mobile devices */
+@media (max-width: 768px) {
+  .phone-container {
+    display: none !important;
+  }
+
+  .wrap {
+    background: black;
+    height: 100vh;
+  }
+}
+
 /* Start Screen Styles */
 .start-screen {
   display: flex;
@@ -26,6 +89,13 @@ body {
   justify-content: center;
   height: 100vh;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* Adjust for phone screen on desktop */
+@media (min-width: 769px) {
+  .start-screen {
+    height: 100%;
+  }
 }
 
 .start-content {
@@ -85,6 +155,17 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+/* Adjust for phone screen on desktop */
+@media (min-width: 769px) {
+  .game-container {
+    height: 100%;
+  }
+
+  .game {
+    height: calc(100% - 80px);
+  }
 }
 
 .game-header {
@@ -204,6 +285,14 @@ body {
   padding: 20px;
 }
 
+/* Adjust for phone screen on desktop */
+@media (min-width: 769px) {
+  .history-screen, .leaderboard-screen {
+    height: 100%;
+    padding: 10px;
+  }
+}
+
 .history-content, .leaderboard-content {
   max-width: 800px;
   margin: 0 auto;
@@ -212,6 +301,14 @@ body {
   padding: 30px;
   height: calc(100vh - 40px);
   overflow-y: auto;
+}
+
+/* Adjust for phone screen on desktop */
+@media (min-width: 769px) {
+  .history-content, .leaderboard-content {
+    height: calc(100% - 20px);
+    padding: 20px;
+  }
 }
 
 .history-title, .leaderboard-title {
@@ -669,6 +766,14 @@ body {
   height: 100vh;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   padding: 20px;
+}
+
+/* Adjust for phone screen on desktop */
+@media (min-width: 769px) {
+  .level-screen {
+    height: 100%;
+    padding: 10px;
+  }
 }
 
 .level-content {
